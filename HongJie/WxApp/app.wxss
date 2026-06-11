@@ -1,0 +1,23 @@
+/**app.wxss**/
+page {
+  background-color: #f8f9fa;
+}
+
+.container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 200rpx 0;
+  box-sizing: border-box;
+} 
+
+/* 统一按钮样式重置 */
+button {
+  border-radius: 8rpx;
+}
+
+button::after {
+  border: none;
+}

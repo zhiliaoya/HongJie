@@ -1,0 +1,10 @@
+<view class="container">
+  <!-- 新增 logo 区域 -->
+  <view class="logo-container">
+    <image class="logo" src="https://zhiliaoya.cn/logo.png" mode="aspectFit"></image>
+  </view>
+
+  <text class="title">{{resultTitle}}</text>
+  <text class="desc">{{resultDesc}}</text>
+  <button class="close-btn" bindtap="closeMiniProgram">关闭小程序</button>
+</view>

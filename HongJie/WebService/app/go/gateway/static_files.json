@@ -1,0 +1,9 @@
+{
+  "static_files": {
+    "/favicon.ico": "/etc/static/image/favicon.ico",
+    "/logo.png": "/etc/static/image/logo.png",
+    "/loading.gif": "/etc/static/image/loading.gif"
+  },
+  "cache_duration": 86400,
+  "enable_cache": true
+}

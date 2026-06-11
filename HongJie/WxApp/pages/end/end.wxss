@@ -1,0 +1,56 @@
+.container {
+  padding: 40rpx;
+  text-align: center;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background-color: #f8f9fa;
+}
+
+/* 新增 logo 样式 */
+.logo-container {
+  margin-bottom: 60rpx;
+}
+
+.logo {
+  width: 120rpx;
+  height: 120rpx;
+  border-radius: 20rpx;
+}
+
+.title {
+  font-size: 36rpx;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 20rpx;
+  color: #333;
+}
+
+.desc {
+  font-size: 28rpx;
+  color: #666;
+  margin-bottom: 60rpx;
+  line-height: 1.6;
+  padding: 0 40rpx;
+}
+
+.close-btn {
+  background-color: #07c160;
+  color: white;
+  width: 80%;
+  border-radius: 8rpx;
+  font-size: 32rpx;
+  padding: 20rpx 0;
+  border: none;
+}
+
+/* 按钮点击态优化 */
+.close-btn::after {
+  border: none;
+}
+
+.close-btn:active {
+  background-color: #06b058;
+}

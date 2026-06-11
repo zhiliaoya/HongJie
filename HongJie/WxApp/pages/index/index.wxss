@@ -1,0 +1,317 @@
+.container {
+  padding: 40rpx;
+  text-align: center;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background-color: #f8f9fa;
+}
+
+.logo-container {
+  margin-bottom: 40rpx;
+}
+
+.logo {
+  width: 120rpx;
+  height: 120rpx;
+  border-radius: 20rpx;
+}
+
+.header {
+  margin-bottom: 30rpx;
+}
+
+.title {
+  font-size: 36rpx;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 16rpx;
+  color: #333;
+}
+
+.subtitle {
+  font-size: 26rpx;
+  color: #666;
+}
+
+/* ========== 隐私说明区域 ========== */
+.privacy-notice {
+  width: 100%;
+  margin-bottom: 30rpx;
+  padding: 24rpx;
+  background: #ffffff;
+  border-radius: 16rpx;
+  border: 1px solid #e8f5e9;
+  box-shadow: 0 2rpx 12rpx rgba(0, 0, 0, 0.03);
+}
+
+.privacy-icon {
+  font-size: 40rpx;
+  margin-bottom: 12rpx;
+}
+
+.privacy-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #333;
+  display: block;
+  margin-bottom: 16rpx;
+}
+
+.privacy-content {
+  text-align: left;
+}
+
+.privacy-text {
+  font-size: 24rpx;
+  color: #666;
+  display: block;
+  line-height: 1.8;
+  padding-left: 16rpx;
+  position: relative;
+}
+
+.privacy-text::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: #07c160;
+}
+
+/* ========== 授权范围 ========== */
+.auth-scope {
+  width: 100%;
+  margin-bottom: 30rpx;
+  padding: 20rpx 24rpx;
+  background: #f0faf1;
+  border-radius: 12rpx;
+}
+
+.scope-item {
+  display: flex;
+  align-items: center;
+  padding: 8rpx 0;
+}
+
+.scope-icon {
+  width: 36rpx;
+  height: 36rpx;
+  line-height: 36rpx;
+  text-align: center;
+  background: #07c160;
+  color: #fff;
+  border-radius: 50%;
+  font-size: 20rpx;
+  margin-right: 16rpx;
+  flex-shrink: 0;
+}
+
+.scope-text {
+  font-size: 26rpx;
+  color: #333;
+}
+
+/* ========== 按钮区域 ========== */
+.buttons {
+  padding: 0 40rpx;
+  width: 100%;
+}
+
+.confirm-btn {
+  background-color: #07c160;
+  color: white;
+  margin-bottom: 16rpx;
+  border-radius: 8rpx;
+  font-size: 32rpx;
+  padding: 20rpx 0;
+  border: none;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, background-color;
+}
+
+.cancel-btn {
+  background-color: #fff;
+  color: #666;
+  border-radius: 8rpx;
+  font-size: 32rpx;
+  padding: 20rpx 0;
+  border: 1px solid #eee;
+  margin-bottom: 20rpx;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, background-color;
+}
+
+.confirm-btn-hover {
+  background-color: #06b058 !important;
+  transform: scale(0.98);
+  opacity: 0.9;
+}
+
+.cancel-btn-hover {
+  background-color: #f5f5f5 !important;
+  transform: scale(0.98);
+  opacity: 0.9;
+}
+
+button::after {
+  display: none;
+}
+
+/* ========== 用户协议 ========== */
+.agreement-box {
+  margin-top: 16rpx;
+  padding: 12rpx 0;
+}
+
+.agreement-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.agreement-text {
+  font-size: 22rpx;
+  color: #999;
+  margin-left: 8rpx;
+}
+
+.agreement-link {
+  color: #576b95;
+}
+
+/* ========== 加载状态 ========== */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30rpx 0;
+}
+
+.loading-gif {
+  width: 80rpx;
+  height: 80rpx;
+  margin-bottom: 24rpx;
+}
+
+.loading-text {
+  font-size: 28rpx;
+  color: #999;
+  letter-spacing: 2rpx;
+  margin-bottom: 12rpx;
+}
+
+.loading-desc {
+  font-size: 22rpx;
+  color: #bbb;
+}
+/* 功能介绍卡片 */
+.feature-cards {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 30rpx;
+}
+
+.feature-card {
+  width: 30%;
+  background: #fff;
+  border-radius: 12rpx;
+  padding: 20rpx 10rpx;
+  text-align: center;
+  box-shadow: 0 2rpx 10rpx rgba(0,0,0,0.04);
+}
+
+.feature-card .feature-icon {
+  font-size: 36rpx;
+  display: block;
+  margin-bottom: 10rpx;
+}
+
+.feature-card .feature-title {
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #333;
+  display: block;
+  margin-bottom: 6rpx;
+}
+
+.feature-card .feature-desc {
+  font-size: 20rpx;
+  color: #999;
+}
+
+/* 步骤 */
+.steps-box {
+  width: 100%;
+  background: #fff;
+  border-radius: 16rpx;
+  padding: 24rpx;
+  margin-bottom: 24rpx;
+  box-shadow: 0 2rpx 10rpx rgba(0,0,0,0.04);
+}
+
+.steps-title {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 20rpx;
+  display: block;
+}
+
+.step-item {
+  display: flex;
+  align-items: flex-start;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid #f5f5f5;
+}
+
+.step-item:last-child {
+  border-bottom: none;
+}
+
+.step-num {
+  width: 40rpx;
+  height: 40rpx;
+  line-height: 40rpx;
+  text-align: center;
+  background: #07c160;
+  color: #fff;
+  border-radius: 50%;
+  font-size: 22rpx;
+  font-weight: 600;
+  margin-right: 16rpx;
+  flex-shrink: 0;
+}
+
+.step-content {
+  text-align: left;
+}
+
+.step-content .step-title {
+  font-size: 26rpx;
+  color: #333;
+  font-weight: 600;
+  display: block;
+  margin-bottom: 4rpx;
+}
+
+.step-content .step-desc {
+  font-size: 22rpx;
+  color: #999;
+}
+
+.notice-box {
+  width: 100%;
+  padding: 16rpx;
+  background: #f0faf1;
+  border-radius: 10rpx;
+  border: 1rpx solid #d4edda;
+}
+
+.notice-text {
+  font-size: 22rpx;
+  color: #155724;
+}

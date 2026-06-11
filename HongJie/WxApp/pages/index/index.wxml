@@ -1,0 +1,102 @@
+<view class="container">
+  <view class="logo-container">
+    <image class="logo" src="https://zhiliaoya.cn/logo.png" mode="aspectFit"></image>
+  </view>
+
+  <!-- ========== 非扫码进入：功能介绍页 ========== -->
+  <block wx:if="{{!hasScene}}">
+    <view class="header">
+      <text class="title">知了涯·扫码登录</text>
+      <text class="subtitle">安全便捷的网页端登录工具</text>
+    </view>
+
+    <view class="feature-cards">
+      <view class="feature-card">
+        <text class="feature-icon">🔐</text>
+        <text class="feature-title">安全验证</text>
+        <text class="feature-desc">通过微信官方接口验证身份，保障账户安全</text>
+      </view>
+      <view class="feature-card">
+        <text class="feature-icon">⚡</text>
+        <text class="feature-title">一键登录</text>
+        <text class="feature-desc">扫码后确认即可完成网页端登录，无需输入密码</text>
+      </view>
+      <view class="feature-card">
+        <text class="feature-icon">🛡️</text>
+        <text class="feature-title">隐私保护</text>
+        <text class="feature-desc">仅验证用户身份，不获取头像昵称等个人信息</text>
+      </view>
+    </view>
+
+    <view class="steps-box">
+      <text class="steps-title">使用步骤</text>
+      <view class="step-item">
+        <view class="step-num">1</view>
+        <view class="step-content">
+          <text class="step-title">打开网页端</text>
+          <text class="step-desc">在电脑浏览器访问 zhiliaoya.cn</text>
+        </view>
+      </view>
+      <view class="step-item">
+        <view class="step-num">2</view>
+        <view class="step-content">
+          <text class="step-title">获取小程序码</text>
+          <text class="step-desc">点击页面上的「微信扫码登录」按钮</text>
+        </view>
+      </view>
+      <view class="step-item">
+        <view class="step-num">3</view>
+        <view class="step-content">
+          <text class="step-title">扫码确认</text>
+          <text class="step-desc">使用微信扫描小程序码，在本页面确认登录</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="notice-box">
+      <text class="notice-text">📌 本小程序为网页端配套工具，请通过网页端扫码使用</text>
+    </view>
+  </block>
+
+  <!-- ========== 扫码进入：授权确认页 ========== -->
+  <block wx:if="{{hasScene}}">
+    <view class="header">
+      <text class="title">登录确认</text>
+      <text class="subtitle">确认登录到 zhiliaoya.cn</text>
+    </view>
+
+    <view class="privacy-notice">
+      <view class="privacy-icon">🔒</view>
+      <text class="privacy-title">隐私保护说明</text>
+      <view class="privacy-content">
+        <text class="privacy-text">1. 我们将获取您的微信OpenID用于身份验证</text>
+        <text class="privacy-text">2. 您的OpenID仅用于本次登录授权，不会用于其他用途</text>
+        <text class="privacy-text">3. 登录成功后，网页端将获得本次会话的临时访问权限</text>
+        <text class="privacy-text">4. 您的个人信息不会被存储或分享给第三方</text>
+      </view>
+    </view>
+
+    <view class="auth-scope">
+      <view class="scope-item">
+        <text class="scope-icon">✓</text>
+        <text class="scope-text">获取您的微信OpenID</text>
+      </view>
+      <view class="scope-item">
+        <text class="scope-icon">✓</text>
+        <text class="scope-text">验证您的微信身份</text>
+      </view>
+    </view>
+
+    <view class="buttons">
+      <block wx:if="{{!loading}}">
+        <button class="confirm-btn" bindtap="confirmLogin" hover-class="confirm-btn-hover">确认登录</button>
+        <button class="cancel-btn" bindtap="cancelLogin" hover-class="cancel-btn-hover">取消</button>
+      </block>
+      <view wx:if="{{loading}}" class="loading-container">
+        <image class="loading-gif" src="https://zhiliaoya.cn/loading.gif" mode="aspectFit"></image>
+        <text class="loading-text">正在验证身份...</text>
+        <text class="loading-desc">正在通过微信官方接口验证您的OpenID</text>
+      </view>
+    </view>
+  </block>
+</view>

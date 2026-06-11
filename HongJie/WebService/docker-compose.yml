@@ -1,0 +1,52 @@
+networks:
+  open-net:
+    name: open-net
+    driver: bridge
+
+services:
+  # Gateway（网关服务）
+  gateway-service:
+    image: golang:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./app/go/gateway:/app
+      - ./logs/gateway:/var/log
+      - ./certbot/zhiliaoya:/etc/letsencrypt:ro # 域名签名证书路径需要自行更换挂载路径
+      - ./static/image:/etc/static/image:ro
+      # webroot 验证目录（可写，用于续期）
+      - ./certbot/zhiliaoya/webroot:/var/www/certbot # 域名签名证书路径需要自行更换挂载路径
+      - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    working_dir: /app
+    environment:
+      - TZ=Asia/Shanghai
+      - GO111MODULE=on
+      - GOPROXY=https://goproxy.cn,direct
+      - SERVICE_NAME=gateway
+    command: tail -f /dev/null # 测试开发阶段使用
+    restart: unless-stopped
+    networks:
+      - open-net
+    container_name: gateway-service
+
+  # web（网页服务，其他语言容器也可以）
+  web-service:
+    image: golang:alpine
+    expose:
+      - "80"
+    volumes:
+      - ./app/go/web:/app
+      - ./logs/web:/var/log
+      - /usr/share/zoneinfo/Asia/Shanghai:/etc/localtime:ro
+    working_dir: /app
+    environment:
+      - TZ=Asia/Shanghai
+      - GO111MODULE=on
+      - GOPROXY=https://goproxy.cn,direct
+      - SERVICE_NAME=web
+    command: tail -f /dev/null # 测试开发阶段使用
+    restart: unless-stopped
+    networks:
+      - open-net
+    container_name: web-service
