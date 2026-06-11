@@ -539,6 +539,118 @@ platform = request.headers.get('X-Platform')
    │                   │───────────────────────────────────────────────────────────>│
 ```
 
+### 拦截效果
+```
+/app # go run main.go
+2026/06/11 13:34:59 📁 加载静态文件配置: 3 个文件
+2026/06/11 13:34:59 🚀 HTTPS 网关启动在 :443
+2026/06/11 13:34:59 🔗 后端Web服务: http://web-service:80
+2026/06/11 13:34:59 🔒 防护层已启用: IP封禁 + PoW挑战 + Turnstile + 设备指纹限流 + 一次性动态链路
+2026/06/11 13:34:59 HTTP 服务器启动在 :80
+2026/06/11 13:34:59 微信 access token 刷新成功，有效期: 7200 秒
+2026/06/11 13:35:08 📱 创建场景 [SceneID: a3741ae78e163436675be9e27afddb71]
+2026/06/11 13:35:08 🔗 创建一次性链路 [Token: 6d70b1f2, SceneID: a3741ae78e163436675be9e27afddb71]
+2026/06/11 13:35:09 ✅ 二维码生成成功 [IP: 123.138.119.22, SceneID: a3741ae78e163436675be9e27afddb71]
+2026/06/11 13:35:17 🔄 场景状态变更 [SceneID: a3741ae78e163436675be9e27afddb71, pending -> confirmed, UserID: 656ccfc9-d07a-e0da-946d-fb1e4c019688]
+2026/06/11 13:35:17 ✅ 微信验证成功 [SceneID: a3741ae78e163436675be9e27afddb71, UserID: 656ccfc9-d07a-e0da-946d-fb1e4c019688]
+2026/06/11 13:35:17 🔄 Token交换请求 [SceneID: a3741ae78e163436675be9e27afddb71]
+2026/06/11 13:35:17 ✅ 创建授权令牌 [Token: f1b3d05b4a81ed2a..., UserID: 656ccfc9-d07a-e0da-946d-fb1e4c019688]
+2026/06/11 13:35:18 🌐 网关入口 [GET /]
+2026/06/11 13:35:18 ✅ 已认证 [UserID: 656ccfc9-d07a-e0da-946d-fb1e4c019688]，代理转发
+2026/06/11 13:38:21 🌐 网关入口 [GET /]
+2026/06/11 13:38:21 👤 未认证，跳转登录页
+2026/06/11 13:39:27 🌐 网关入口 [GET /]
+2026/06/11 13:39:27 👤 未认证，跳转登录页
+2026/06/11 13:46:35 🌐 网关入口 [GET /]
+2026/06/11 13:46:35 👤 未认证，跳转登录页
+2026/06/11 13:48:15 🌐 网关入口 [GET /ReportServer]
+2026/06/11 13:48:15 👤 未认证，跳转登录页
+2026/06/11 13:53:25 🌐 网关入口 [GET /]
+2026/06/11 13:53:25 👤 未认证，跳转登录页
+2026/06/11 13:54:37 🌐 网关入口 [GET /wp-admin/install.php]
+2026/06/11 13:54:37 👤 未认证，跳转登录页
+2026/06/11 14:06:59 http: TLS handshake error from 43.133.14.237:44102: client sent an HTTP request to an HTTPS server
+2026/06/11 14:18:32 🌐 网关入口 [GET /]
+2026/06/11 14:18:32 👤 未认证，跳转登录页
+2026/06/11 14:19:50 🌐 网关入口 [GET /]
+2026/06/11 14:19:50 👤 未认证，跳转登录页
+2026/06/11 14:24:05 http: TLS handshake error from 65.49.20.66:2732: tls: client offered only unsupported versions: []
+2026/06/11 14:24:33 http: TLS handshake error from 65.49.20.66:58982: tls: no cipher suite supported by both client and server; client offered: [3 6 8]
+2026/06/11 14:25:35 http: TLS handshake error from 65.49.20.66:29000: read tcp 192.168.64.2:443->65.49.20.66:29000: read: connection reset by peer
+2026/06/11 14:25:36 http: TLS handshake error from 65.49.20.66:29016: read tcp 192.168.64.2:443->65.49.20.66:29016: read: connection reset by peer
+2026/06/11 14:25:37 http: TLS handshake error from 65.49.20.66:29026: read tcp 192.168.64.2:443->65.49.20.66:29026: read: connection reset by peer
+2026/06/11 14:25:37 http: TLS handshake error from 65.49.20.66:29038: tls: client requested unsupported application protocols (["http/0.9" "http/1.0" "spdy/1" "spdy/2" "spdy/3" "h2c" "hq"])
+2026/06/11 14:25:37 http: TLS handshake error from 65.49.20.66:29040: tls: client requested unsupported application protocols (["hq" "h2c" "spdy/3" "spdy/2" "spdy/1" "http/1.0" "http/0.9"])
+2026/06/11 14:25:37 http: TLS handshake error from 65.49.20.66:29054: tls: client offered only unsupported versions: [302 301]
+2026/06/11 14:25:38 http: TLS handshake error from 65.49.20.66:29064: read tcp 192.168.64.2:443->65.49.20.66:29064: read: connection reset by peer
+2026/06/11 14:25:39 http: TLS handshake error from 65.49.20.66:29080: read tcp 192.168.64.2:443->65.49.20.66:29080: read: connection reset by peer
+2026/06/11 14:25:39 http: TLS handshake error from 65.49.20.66:29090: tls: no cipher suite supported by both client and server; client offered: [16 33 67 c09e c0a2 9e 39 6b c09f c0a3 9f 45 be 88 c4 9a c008 c009 c023 c0ac c0ae c02b c00a c024 c0ad c0af c02c c072 c073 cca9 cc14 c007 c012 c013 c027 c02f c014 c028 c030 c060 c061 c076 c077 cca8 cc13 c011 a 2f 3c c09c c0a0 9c 35 3d c09d c0a1 9d 41 ba 84 c0 7 4 5]
+2026/06/11 14:25:40 http: TLS handshake error from 65.49.20.66:19112: read tcp 192.168.64.2:443->65.49.20.66:19112: read: connection reset by peer
+2026/06/11 14:28:17 🌐 网关入口 [GET /]
+2026/06/11 14:28:17 👤 未认证，跳转登录页
+2026/06/11 14:29:07 🌐 网关入口 [GET /]
+2026/06/11 14:29:07 👤 未认证，跳转登录页
+2026/06/11 14:29:13 🌐 网关入口 [GET /]
+2026/06/11 14:29:13 👤 未认证，跳转登录页
+2026/06/11 14:32:06 🌐 网关入口 [GET /favicon.ico]
+2026/06/11 14:32:06 📁 静态文件请求: /favicon.ico -> /etc/static/image/favicon.ico
+2026/06/11 14:35:01 🌐 网关入口 [GET /api/v2/static/not.found]
+2026/06/11 14:35:01 👤 未认证，跳转登录页
+2026/06/11 14:35:06 🌐 网关入口 [GET /api/v2/static/not.found]
+2026/06/11 14:35:06 👤 未认证，跳转登录页
+2026/06/11 14:35:23 🌐 网关入口 [GET /remote/logincheck]
+2026/06/11 14:35:23 👤 未认证，跳转登录页
+2026/06/11 14:35:31 🌐 网关入口 [GET /remote/logincheck]
+2026/06/11 14:35:31 👤 未认证，跳转登录页
+2026/06/11 14:35:40 🌐 网关入口 [GET /fonts/ftnt-icons.woff]
+2026/06/11 14:35:40 👤 未认证，跳转登录页
+2026/06/11 14:35:41 🌐 网关入口 [GET /fonts/ftnt-icons.woff]
+2026/06/11 14:35:41 👤 未认证，跳转登录页
+2026/06/11 14:37:38 🌐 网关入口 [GET /]
+2026/06/11 14:37:38 👤 未认证，跳转登录页
+2026/06/11 14:38:31 🌐 网关入口 [GET /lang/custom/sbin/init]
+2026/06/11 14:38:31 👤 未认证，跳转登录页
+2026/06/11 14:38:39 🌐 网关入口 [GET /lang/custom/sbin/init]
+2026/06/11 14:38:39 👤 未认证，跳转登录页
+2026/06/11 14:39:38 🌐 网关入口 [GET /static/lang/custom/sbin/init]
+2026/06/11 14:39:38 👤 未认证，跳转登录页
+2026/06/11 14:40:29 🌐 网关入口 [GET /lang/legacy/filechecksum]
+2026/06/11 14:40:29 👤 未认证，跳转登录页
+2026/06/11 14:40:35 🌐 网关入口 [GET /lang/legacy/filechecksum]
+2026/06/11 14:40:35 👤 未认证，跳转登录页
+2026/06/11 14:40:55 🌐 网关入口 [GET /migadmin/lang/legacy/legacy/filechecksum]
+2026/06/11 14:40:55 👤 未认证，跳转登录页
+2026/06/11 14:41:22 🌐 网关入口 [GET /migadmin/lang/legacy/legacy/filechecksum]
+2026/06/11 14:41:22 👤 未认证，跳转登录页
+2026/06/11 14:41:46 🌐 网关入口 [GET /vpn/index.html]
+2026/06/11 14:41:46 👤 未认证，跳转登录页
+2026/06/11 14:41:57 🌐 网关入口 [GET /vpn/index.html]
+2026/06/11 14:41:57 👤 未认证，跳转登录页
+2026/06/11 14:42:10 🌐 网关入口 [GET /logon/LogonPoint/index.html]
+2026/06/11 14:42:10 👤 未认证，跳转登录页
+2026/06/11 14:42:31 🌐 网关入口 [GET /logon/LogonPoint/index.html]
+2026/06/11 14:42:31 👤 未认证，跳转登录页
+2026/06/11 14:43:22 🌐 网关入口 [GET /geoserver/web/]
+2026/06/11 14:43:22 👤 未认证，跳转登录页
+2026/06/11 14:45:33 http: TLS handshake error from 45.156.128.49:57138: EOF
+2026/06/11 14:45:34 🌐 网关入口 [GET /]
+2026/06/11 14:45:34 👤 未认证，跳转登录页
+2026/06/11 14:47:38 http: TLS handshake error from 66.249.68.168:38856: read tcp 192.168.64.2:443->66.249.68.168:38856: read: connection reset by peer
+2026/06/11 14:53:54 http: TLS handshake error from 71.6.199.65:49758: read tcp 192.168.64.2:443->71.6.199.65:49758: read: connection reset by peer
+2026/06/11 15:02:54 http: TLS handshake error from 206.223.236.181:46120: client sent an HTTP request to an HTTPS server
+2026/06/11 15:24:29 🌐 网关入口 [GET /]
+2026/06/11 15:24:29 👤 未认证，跳转登录页
+2026/06/11 15:24:29 🌐 网关入口 [GET /logo.png]
+2026/06/11 15:24:29 📁 静态文件请求: /logo.png -> /etc/static/image/logo.png
+2026/06/11 15:30:00 微信 access token 刷新成功，有效期: 7200 秒
+2026/06/11 15:30:33 🌐 网关入口 [GET /wp-admin/install.php]
+2026/06/11 15:30:33 👤 未认证，跳转登录页
+2026/06/11 15:32:28 🌐 网关入口 [GET /]
+2026/06/11 15:32:28 👤 未认证，跳转登录页
+2026/06/11 15:38:14 🌐 网关入口 [GET /]
+2026/06/11 15:38:14 👤 未认证，跳转登录页
+```
+
 ## 技术栈
 
 | 组件 | 技术 |
