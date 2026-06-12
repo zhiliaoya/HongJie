@@ -246,6 +246,8 @@ $platform = $_SERVER['HTTP_X_PLATFORM'];  # wechat/alipay/douyin/kuaishou
 
 **示例网站：** [https://zhiliaoya.cn/](https://zhiliaoya.cn/)
 
+**演示视频：** (https://www.bilibili.com/video/BV1RREe6MEhi/?share_source=copy_web&vd_source=8f734f1e86c1b345adc07138e11bb4e1)
+
 > 访问上述网址，点击「获取二维码」，使用**微信**扫码即可体验完整登录流程。
 >
 > *注：示例网站仅用于演示，请勿提交敏感信息。*
