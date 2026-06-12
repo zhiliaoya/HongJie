@@ -2,15 +2,12 @@ Page({
   data: {
     sceneToken: '',
     loading: false,
-    hasScene: false,    // 新增：是否扫码进入
-    isDefault: false
+    hasScene: false    // 是否扫码进入
   },
 
   onLoad(options) {
     console.log('页面加载，options:', options);
-    
-    const DEFAULT_SCENE_ID = 'fe9432b75b02d3d51e90892389496957';
-    
+
     let scene = '';
     if (options.scene) {
       scene = decodeURIComponent(options.scene);
@@ -19,40 +16,30 @@ Page({
       scene = decodeURIComponent(options.q);
       console.log('二维码参数:', scene);
     }
-    
+
     if (scene) {
       // 扫码进入 → 显示授权确认页
       this.setData({ 
         sceneToken: scene,
-        hasScene: true,
-        isDefault: false
+        hasScene: true
       });
     } else {
       // 非扫码进入（搜索/历史记录） → 显示功能介绍页
       this.setData({ 
-        hasScene: false,
-        isDefault: false
+        hasScene: false
       });
     }
-    
+
     console.log('场景令牌:', this.data.sceneToken);
     console.log('hasScene:', this.data.hasScene);
   },
 
   confirmLogin() {
-    if (this.data.isDefault) {
-      this.handleDefaultAction('confirm');
-    } else {
-      this.handleDynamicAction('confirm');
-    }
+    this.handleDynamicAction('confirm');
   },
 
   cancelLogin() {
-    if (this.data.isDefault) {
-      this.handleDefaultAction('cancel');
-    } else {
-      this.handleCancelDynamicAction();
-    }
+    this.handleDynamicAction('cancel');
   },
 
   /**
@@ -67,69 +54,17 @@ Page({
   },
 
   /**
-   * 处理默认测试场景（兼容旧逻辑）
-   */
-  handleDefaultAction(action) {
-    if (this.data.loading) return;
-    
-    const { sceneToken } = this.data;
-    if (!sceneToken) {
-      this.navigateToEnd('参数错误', '未获取到有效的小程序二维码ID');
-      return;
-    }
-    
-    this.setData({ loading: true });
-    
-    const userInfo = wx.getStorageSync('userInfo') || {};
-    const openid = wx.getStorageSync('openid') || '';
-    
-    console.log('默认场景请求:', {
-      url: 'https://zhiliaoya.cn/api/callback',
-      scene_id: sceneToken,
-      action: action
-    });
-    
-    wx.request({
-      url: 'https://zhiliaoya.cn/api/callback',
-      method: 'POST',
-      header: {
-        'content-type': 'application/json'
-      },
-      data: {
-        scene_id: sceneToken,
-        action: action,
-        user_id: openid || userInfo.openid || 'anonymous'
-      },
-      success: (res) => {
-        console.log('请求成功:', res);
-        
-        if (res.statusCode === 200 && res.data && res.data.success) {
-          this.navigateToEnd('登录成功', '已完成授权，可返回网页端继续操作');
-        } else if (res.statusCode === 200) {
-          this.navigateToEnd('登录失败', res.data.message || '操作失败');
-        } else {
-          this.navigateToEnd('服务器错误', `错误码: ${res.statusCode}`);
-        }
-      },
-      fail: (err) => {
-        console.error('请求失败:', err);
-        this.navigateToEnd('登录失败', '网络错误，请重试');
-      }
-    });
-  },
-
-  /**
    * 处理动态链路确认（新版核心逻辑）
    */
   handleDynamicAction(action) {
     if (this.data.loading) return;
-    
+
     const { sceneToken } = this.data;
     if (!sceneToken) {
       this.navigateToEnd('参数错误', '未获取到有效的场景令牌');
       return;
     }
-    
+
     if (action === 'confirm') {
       this.loginWithWechatCode();
     } else if (action === 'cancel') {
@@ -142,11 +77,11 @@ Page({
    */
   handleCancelDynamicAction() {
     const { sceneToken } = this.data;
-    
+
     this.setData({ loading: true });
-    
+
     wx.request({
-      url: `https://zhiliaoya.cn/api/${sceneToken}`,
+      url: `你的域名地址/api/${sceneToken}`,
       method: 'POST',
       header: {
         'content-type': 'application/json'
@@ -170,11 +105,11 @@ Page({
    */
   loginWithWechatCode() {
     const { sceneToken } = this.data;
-    
+
     this.setData({ loading: true });
-    
+
     console.log('开始获取微信 code...');
-    
+
     wx.login({
       success: (loginRes) => {
         if (!loginRes.code) {
@@ -183,10 +118,10 @@ Page({
           this.navigateToEnd('登录失败', '获取微信授权失败，请重试');
           return;
         }
-        
+
         const code = loginRes.code;
         console.log('获取到微信 code:', code);
-        
+
         this.verifyWithCode(sceneToken, code);
       },
       fail: (err) => {
@@ -202,12 +137,12 @@ Page({
    */
   verifyWithCode(sceneToken, code) {
     console.log('开始验证:', {
-      url: `https://zhiliaoya.cn/api/${sceneToken}`,
+      url: `你的域名地址/api/${sceneToken}`,
       code: code
     });
-    
+
     wx.request({
-      url: `https://zhiliaoya.cn/api/${sceneToken}`,
+      url: `你的域名地址/api/${sceneToken}`,
       method: 'POST',
       header: {
         'content-type': 'application/json'
@@ -217,7 +152,7 @@ Page({
       },
       success: (res) => {
         console.log('验证结果:', res);
-        
+
         if (res.statusCode === 200 && res.data && res.data.success) {
           this.navigateToEnd('登录成功', '已完成授权，可返回网页端继续操作');
         } else {
