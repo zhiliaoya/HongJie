@@ -41,26 +41,23 @@ var (
 	accessToken   string
 	accessTokenMu sync.RWMutex
 
-	sceneStore     = NewSceneStore()
-	authTokenStore = NewAuthTokenStore()
+	sceneStore       = NewSceneStore()
+	authTokenStore   = NewAuthTokenStore()
+	authSessionStore = NewAuthSessionStore()
 
 	staticConfig   *StaticConfig
 	staticConfigMu sync.RWMutex
 
-	// 防御层
 	qrRateLimiter  = NewQRRateLimiter()
 	ipBanList      = NewIPBanList()
 	suspiciousLog  = NewSuspiciousLogger()
 	challengeStore = NewChallengeStore()
-
-	defaultTestSceneID = "fe9432b75b02d3d51e90892389496957"
 )
 
 // ─────────────────────────────────────────────
 // 场景令牌存储（一次性动态链路）
 // ─────────────────────────────────────────────
 
-// SceneToken 一次性场景令牌，60秒有效期
 type SceneToken struct {
 	Token     string    `json:"token"`
 	SceneID   string    `json:"scene_id"`
@@ -69,11 +66,10 @@ type SceneToken struct {
 	Used      bool      `json:"used"`
 }
 
-// SceneTokenStore 管理一次性动态链路
 type SceneTokenStore struct {
 	mu     sync.RWMutex
-	tokens map[string]*SceneToken // token -> SceneToken
-	scenes map[string]string      // sceneID -> token (反向映射)
+	tokens map[string]*SceneToken
+	scenes map[string]string
 }
 
 func NewSceneTokenStore() *SceneTokenStore {
@@ -85,12 +81,10 @@ func NewSceneTokenStore() *SceneTokenStore {
 	return s
 }
 
-// CreateToken 为场景生成一次性令牌，返回 token 字符串
 func (s *SceneTokenStore) CreateToken(sceneID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 如果已有未使用的 token，先作废
 	if oldToken, exists := s.scenes[sceneID]; exists {
 		if t, ok := s.tokens[oldToken]; ok {
 			t.Used = true
@@ -112,7 +106,6 @@ func (s *SceneTokenStore) CreateToken(sceneID string) string {
 	return token
 }
 
-// Validate 验证令牌是否有效，返回场景ID
 func (s *SceneTokenStore) Validate(token string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -127,25 +120,8 @@ func (s *SceneTokenStore) Validate(token string) (string, bool) {
 		return "", false
 	}
 
-	// 标记为已使用（一次性）
 	st.Used = true
 	return st.SceneID, true
-}
-
-// GetTokenByScene 通过场景ID获取当前有效令牌
-func (s *SceneTokenStore) GetTokenByScene(sceneID string) (string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	token, exists := s.scenes[sceneID]
-	if !exists {
-		return "", false
-	}
-	st, ok := s.tokens[token]
-	if !ok || st.Used || time.Now().After(st.ExpiresAt) {
-		return "", false
-	}
-	return token, true
 }
 
 func (s *SceneTokenStore) cleanup() {
@@ -159,7 +135,6 @@ func (s *SceneTokenStore) cleanup() {
 				delete(s.tokens, k)
 			}
 		}
-		// 清理过期的反向映射
 		for sceneID, token := range s.scenes {
 			if _, exists := s.tokens[token]; !exists {
 				delete(s.scenes, sceneID)
@@ -172,7 +147,84 @@ func (s *SceneTokenStore) cleanup() {
 var sceneTokenStore = NewSceneTokenStore()
 
 func generateSceneToken() string {
-	b := make([]byte, 16) // 192 bits，足够安全
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// ─────────────────────────────────────────────
+// 授权会话存储（绑定客户端与 scene_id）
+// ─────────────────────────────────────────────
+
+type AuthSession struct {
+	SessionID string    `json:"session_id"`
+	SceneID   string    `json:"scene_id"`
+	Confirmed bool      `json:"confirmed"`
+	Exchanged bool      `json:"exchanged"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type AuthSessionStore struct {
+	mu       sync.RWMutex
+	sessions map[string]*AuthSession
+}
+
+func NewAuthSessionStore() *AuthSessionStore {
+	s := &AuthSessionStore{
+		sessions: make(map[string]*AuthSession),
+	}
+	go s.cleanup()
+	return s
+}
+
+func (s *AuthSessionStore) Create(sceneID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sessionID := generateAuthSessionID()
+	s.sessions[sessionID] = &AuthSession{
+		SessionID: sessionID,
+		SceneID:   sceneID,
+		CreatedAt: time.Now(),
+	}
+	return sessionID
+}
+
+func (s *AuthSessionStore) Get(sessionID string) (*AuthSession, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	as, ok := s.sessions[sessionID]
+	return as, ok
+}
+
+func (s *AuthSessionStore) MarkExchanged(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	as, ok := s.sessions[sessionID]
+	if !ok || as.Exchanged {
+		return false
+	}
+	as.Exchanged = true
+	return true
+}
+
+func (s *AuthSessionStore) cleanup() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.mu.Lock()
+		now := time.Now()
+		for id, as := range s.sessions {
+			if now.Sub(as.CreatedAt) > 10*time.Minute {
+				delete(s.sessions, id)
+			}
+		}
+		s.mu.Unlock()
+	}
+}
+
+func generateAuthSessionID() string {
+	b := make([]byte, 32)
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
@@ -551,8 +603,8 @@ type SceneStatus struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	UserID      string    `json:"user_id,omitempty"`
-	OpenID      string    `json:"open_id,omitempty"`
-	RedirectURI string    `json:"redirect_uri,omitempty"` // 可选的跳转目标
+	OpenID      string    `json:"-"` // 仅内部记录，绝不输出
+	RedirectURI string    `json:"redirect_uri,omitempty"`
 }
 
 type SceneStore struct {
@@ -563,7 +615,6 @@ type SceneStore struct {
 type AuthToken struct {
 	Token     string    `json:"token"`
 	UserID    string    `json:"user_id"`
-	OpenID    string    `json:"open_id,omitempty"`
 	SceneID   string    `json:"scene_id"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -580,20 +631,19 @@ func NewAuthTokenStore() *AuthTokenStore {
 	return store
 }
 
-func (s *AuthTokenStore) CreateToken(userID, openID, sceneID string) *AuthToken {
+func (s *AuthTokenStore) CreateToken(userID, sceneID string) *AuthToken {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	token := generateAuthToken()
 	authToken := &AuthToken{
 		Token:     token,
 		UserID:    userID,
-		OpenID:    openID,
 		SceneID:   sceneID,
 		CreatedAt: time.Now(),
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
 	s.tokens[token] = authToken
-	log.Printf("✅ 创建授权令牌 [Token: %s..., UserID: %s, OpenID: %s]", token[:16], userID, openID)
+	log.Printf("✅ 创建授权令牌 [Token: %s..., UserID: %s]", token[:16], userID)
 	return authToken
 }
 
@@ -666,10 +716,10 @@ func (s *SceneStore) UpdateScene(sceneID, status, userID, openID string) (*Scene
 		scene.UserID = userID
 	}
 	if openID != "" {
-		scene.OpenID = openID
+		scene.OpenID = openID // 内部记录，JSON不输出
 	}
-	log.Printf("🔄 场景状态变更 [SceneID: %s, %s -> %s, UserID: %s, OpenID: %s]",
-		sceneID, oldStatus, status, scene.UserID, scene.OpenID)
+	log.Printf("🔄 场景状态变更 [SceneID: %s, %s -> %s, UserID: %s]",
+		sceneID, oldStatus, status, scene.UserID)
 	return scene, true
 }
 
@@ -687,7 +737,7 @@ func (s *SceneStore) cleanExpiredScenes() {
 		s.mu.Lock()
 		now := time.Now()
 		for id, scene := range s.scenes {
-			if id != defaultTestSceneID && now.Sub(scene.CreatedAt) > 5*time.Minute {
+			if now.Sub(scene.CreatedAt) > 5*time.Minute {
 				delete(s.scenes, id)
 			}
 		}
@@ -729,6 +779,12 @@ func generateAuthToken() string {
 	return hex.EncodeToString(b)
 }
 
+func generateUserID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
 // ─────────────────────────────────────────────
 // API：获取 PoW 挑战
 // ─────────────────────────────────────────────
@@ -751,7 +807,7 @@ func handleQRChallenge(w http.ResponseWriter, r *http.Request) {
 }
 
 // ─────────────────────────────────────────────
-// API：生成二维码（含全部防御，返回动态链路）
+// API：生成二维码（返回动态链路，通过 cookie 绑定会话）
 // ─────────────────────────────────────────────
 
 func handleQRRequest(w http.ResponseWriter, r *http.Request) {
@@ -763,7 +819,6 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 	ip := getClientIP(r)
 	w.Header().Set("Content-Type", "application/json")
 
-	// 防御 1：IP 封禁检查
 	if ipBanList.IsBanned(ip) {
 		suspiciousLog.Log(ip, "banned_ip_qr", "封禁期间请求二维码")
 		ipBanList.AddStrike(ip)
@@ -774,7 +829,6 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 解析请求体
 	var req struct {
 		Fingerprint  string `json:"fingerprint"`
 		PowSeed      string `json:"pow_seed"`
@@ -786,7 +840,6 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 防御 2：基础字段校验
 	if req.Fingerprint == "" || req.PowSeed == "" || req.PowNonce == "" {
 		suspiciousLog.Log(ip, "missing_fields", fmt.Sprintf("fp=%v seed=%v nonce=%v",
 			req.Fingerprint != "", req.PowSeed != "", req.PowNonce != ""))
@@ -798,7 +851,6 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 防御 3：Cloudflare Turnstile 人机验证
 	if cfTurnstileSecret != "" {
 		if !verifyCFTurnstile(req.CaptchaToken, ip) {
 			suspiciousLog.Log(ip, "captcha_failed", "Turnstile验证失败")
@@ -811,7 +863,6 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 防御 4：工作量证明验证
 	if !challengeStore.Verify(req.PowSeed, req.PowNonce) {
 		suspiciousLog.Log(ip, "pow_failed", fmt.Sprintf("seed=%s", req.PowSeed))
 		ipBanList.AddStrike(ip)
@@ -822,7 +873,6 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 防御 5：设备指纹 + IP 限流
 	allowed, retryAfter := qrRateLimiter.Allow(req.Fingerprint, ip)
 	if !allowed {
 		suspiciousLog.Log(ip, "rate_limited", fmt.Sprintf("fp=%s retry_after=%ds", req.Fingerprint[:8], retryAfter))
@@ -836,15 +886,11 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ── 全部通过：生成场景 + 动态令牌 ─────────────
 	sceneID := generateSceneID()
 	sceneStore.CreateScene(sceneID)
 
-	// 创建一次性链路令牌
 	sceneToken := sceneTokenStore.CreateToken(sceneID)
 
-	// 小程序码携带的动态路径：/api/{scene_token}
-	// 小程序端拿到 scene_token 后，拼接：https://zhiliaoya.cn/api/{scene_token}?code={wx_code}
 	qrBase64, err := generateMiniProgramCode(sceneToken)
 	if err != nil {
 		log.Printf("❌ 生成二维码失败: %v", err)
@@ -855,38 +901,32 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 通过 HttpOnly Cookie 传递 scene_id（前端不需要知道 scene_token）
+	sessionID := authSessionStore.Create(sceneID)
+
 	http.SetCookie(w, &http.Cookie{
-		Name:     "scene_id",
-		Value:    sceneID,
+		Name:     "auth_session",
+		Value:    sessionID,
 		Path:     "/",
-		Expires:  time.Now().Add(5 * time.Minute),
+		Expires:  time.Now().Add(10 * time.Minute),
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 	})
 
-	log.Printf("✅ 二维码生成成功 [IP: %s, SceneID: %s, TokenPath: /api/%s]", ip, sceneID, sceneToken[:16])
+	log.Printf("✅ 二维码生成成功 [IP: %s, SceneID: %s, SessionID: %s]", ip, sceneID, sessionID[:16])
 
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":  true,
-		"qr":       qrBase64,
-		"scene_id": sceneID,
-		// ⚠️ 不再向前端暴露 scene_token，前端仅通过 scene_id 轮询/SSE
+		"success": true,
+		"qr":      qrBase64,
 	})
 }
 
 // ─────────────────────────────────────────────
-// 核心新增：动态链路处理（微信小程序回调）
-// GET/POST /api/{scene_token}?code=WECHAT_CODE
+// 动态链路处理（微信小程序回调）
 // ─────────────────────────────────────────────
 
 func handleSceneTokenCallback(w http.ResponseWriter, r *http.Request) {
-	// 从路径中提取 scene_token
-	// 路径格式：/api/{scene_token}
 	path := strings.TrimPrefix(r.URL.Path, "/api/")
-
-	// 基础验证：token 长度应为 48（24字节 hex）
 	if len(path) != 32 {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -897,7 +937,6 @@ func handleSceneTokenCallback(w http.ResponseWriter, r *http.Request) {
 
 	sceneToken := path
 
-	// 验证令牌有效性（一次性使用）
 	sceneID, valid := sceneTokenStore.Validate(sceneToken)
 	if !valid {
 		log.Printf("❌ 无效或已使用的一次性链路 [Token: %s]", sceneToken[:16])
@@ -908,28 +947,23 @@ func handleSceneTokenCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 验证场景是否存在
 	_, exists := sceneStore.GetScene(sceneID)
-    if !exists {
-        log.Printf("❌ 场景不存在 [SceneID: %s]", sceneID)
-        w.Header().Set("Content-Type", "application/json")
-        json.NewEncoder(w).Encode(map[string]interface{}{
-            "success": false, "message": "场景已过期",
-        })
-        return
-    }
+	if !exists {
+		log.Printf("❌ 场景不存在 [SceneID: %s]", sceneID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false, "message": "场景已过期",
+		})
+		return
+	}
 
-	// 获取微信 code
 	code := r.URL.Query().Get("code")
-	if code == "" {
-		// 尝试从 POST body 获取
-		if r.Method == "POST" {
-			var body struct {
-				Code string `json:"code"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-				code = body.Code
-			}
+	if code == "" && r.Method == "POST" {
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			code = body.Code
 		}
 	}
 
@@ -942,7 +976,6 @@ func handleSceneTokenCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ── 通过 code 换取 openid ────────────────────
 	openID, err := getWechatOpenID(code)
 	if err != nil {
 		log.Printf("❌ 获取 OpenID 失败 [SceneID: %s, Code: %s, Error: %v]", sceneID, code[:10], err)
@@ -953,27 +986,19 @@ func handleSceneTokenCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ── 验证通过，更新场景状态 ──────────────────
-	// 使用 OpenID 作为 UserID（也可以额外维护用户表）
-	userID := "wx_" + openID
+	userID := generateUserID()
 	updatedScene, _ := sceneStore.UpdateScene(sceneID, "confirmed", userID, openID)
 
-	log.Printf("✅ 微信验证成功 [SceneID: %s, OpenID: %s, UserID: %s]",
-		sceneID, openID, userID)
+	log.Printf("✅ 微信验证成功 [SceneID: %s, UserID: %s]", sceneID, userID)
 
-	// 返回成功，让小程序端展示成功页面
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"message": "登录确认成功",
 		"status":  updatedScene.Status,
 	})
-
-	// 注意：前端的浏览器页面通过 SSE/轮询获知状态变化后，
-	// 调用 /api/exchange-token 获取 auth_token
 }
 
-// getWechatOpenID 通过 code 换取 openid
 func getWechatOpenID(code string) (string, error) {
 	apiURL := fmt.Sprintf(
 		"https://api.weixin.qq.com/sns/jscode2session?appid=%s&secret=%s&js_code=%s&grant_type=authorization_code",
@@ -1063,13 +1088,11 @@ func isPrivateIP(ip string) bool {
 }
 
 // ─────────────────────────────────────────────
-// 原有 Handlers
+// 网关主入口
 // ─────────────────────────────────────────────
 
 func handleGateway(w http.ResponseWriter, r *http.Request) {
-	// ⚠️ 新增：检查是否为动态链路回调（/api/xxx）
 	if strings.HasPrefix(r.URL.Path, "/api/") && len(r.URL.Path) == 37 {
-		// /api/ + 48位hex = 53字符
 		if !strings.Contains(r.URL.Path[5:], ".") && !strings.Contains(r.URL.Path[5:], "/") {
 			handleSceneTokenCallback(w, r)
 			return
@@ -1091,41 +1114,11 @@ func handleGateway(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.SetCookie(w, &http.Cookie{
-			Name:    "auth_token",
-			Value:   "",
-			Path:    "/",
-			Expires: time.Unix(0, 0),
-			MaxAge:  -1, HttpOnly: true, Secure: true,
+			Name:   "auth_token",
+			Value:  "",
+			Path:   "/",
+			MaxAge: -1, HttpOnly: true, Secure: true,
 		})
-	}
-
-	// 从 query 或 cookie 获取 scene_id
-	sceneID := r.URL.Query().Get("scene_id")
-	if sceneID == "" {
-		if cookie, err := r.Cookie("scene_id"); err == nil {
-			sceneID = cookie.Value
-		}
-	}
-
-	if sceneID != "" {
-		scene, exists := sceneStore.GetScene(sceneID)
-		if exists && scene.Status == "confirmed" {
-			authToken := authTokenStore.CreateToken(scene.UserID, scene.OpenID, sceneID)
-			http.SetCookie(w, &http.Cookie{
-				Name:     "auth_token",
-				Value:    authToken.Token,
-				Path:     "/",
-				Expires:  authToken.ExpiresAt,
-				HttpOnly: true,
-				Secure:   true,
-				SameSite: http.SameSiteLaxMode,
-			})
-			proxyToBackend(w, r, authToken)
-			return
-		} else if exists && scene.Status == "pending" {
-			http.Redirect(w, r, "/login?scene="+sceneID, http.StatusFound)
-			return
-		}
 	}
 
 	log.Printf("👤 未认证，跳转登录页")
@@ -1143,7 +1136,6 @@ func proxyToBackend(w http.ResponseWriter, r *http.Request, authToken *AuthToken
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
 		req.Header.Set("X-User-ID", authToken.UserID)
-		req.Header.Set("X-Open-ID", authToken.OpenID)
 		req.Header.Set("X-Auth-Token", authToken.Token)
 		req.Header.Set("X-Forwarded-For", r.RemoteAddr)
 		req.Header.Set("X-Forwarded-Proto", "https")
@@ -1175,32 +1167,36 @@ func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ─────────────────────────────────────────────
+// 令牌交换（通过 auth_session cookie 获取）
+// ─────────────────────────────────────────────
+
 func handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		SceneID string `json:"scene_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	log.Printf("🔄 Token交换请求 [SceneID: %s]", req.SceneID)
 
-	if req.SceneID == defaultTestSceneID {
-		authToken := authTokenStore.CreateToken("test_user_001", "test_openid", req.SceneID)
-		http.SetCookie(w, &http.Cookie{
-			Name: "auth_token", Value: authToken.Token, Path: "/",
-			Expires: authToken.ExpiresAt, HttpOnly: true, Secure: true,
-		})
+	sessionCookie, err := r.Cookie("auth_session")
+	if err != nil || sessionCookie.Value == "" {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "message": "授权成功"})
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false, "message": "会话无效或已过期",
+		})
 		return
 	}
 
-	scene, exists := sceneStore.GetScene(req.SceneID)
+	sessionID := sessionCookie.Value
+	session, ok := authSessionStore.Get(sessionID)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false, "message": "会话不存在",
+		})
+		return
+	}
+
+	scene, exists := sceneStore.GetScene(session.SceneID)
 	if !exists || scene.Status != "confirmed" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -1209,7 +1205,15 @@ func handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authToken := authTokenStore.CreateToken(scene.UserID, scene.OpenID, req.SceneID)
+	if !authSessionStore.MarkExchanged(sessionID) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false, "message": "授权已兑换，请刷新重试",
+		})
+		return
+	}
+
+	authToken := authTokenStore.CreateToken(scene.UserID, session.SceneID)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
 		Value:    authToken.Token,
@@ -1219,6 +1223,13 @@ func handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
+	http.SetCookie(w, &http.Cookie{
+		Name:   "auth_session",
+		Value:  "",
+		Path:   "/",
+		MaxAge: -1, HttpOnly: true, Secure: true,
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
@@ -1226,26 +1237,32 @@ func handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func handleStatusCheck(w http.ResponseWriter, r *http.Request) {
-	sceneID := r.URL.Query().Get("scene_id")
-	if sceneID == "" {
-		http.Error(w, "缺少 scene_id 参数", http.StatusBadRequest)
-		return
-	}
+// ─────────────────────────────────────────────
+// 状态查询（通过 auth_session cookie 获取）
+// ─────────────────────────────────────────────
 
-	if sceneID == defaultTestSceneID {
+func handleStatusCheck(w http.ResponseWriter, r *http.Request) {
+	sessionCookie, err := r.Cookie("auth_session")
+	if err != nil || sessionCookie.Value == "" {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":        "confirmed",
-			"scene_id":      sceneID,
-			"user_id":       "test_user_001",
-			"need_exchange": true,
-			"timestamp":     time.Now().Unix(),
+			"status":  "expired",
+			"message": "会话不存在",
 		})
 		return
 	}
 
-	scene, exists := sceneStore.GetScene(sceneID)
+	sessionID := sessionCookie.Value
+	session, ok := authSessionStore.Get(sessionID)
+	if !ok {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "expired",
+			"message": "会话已过期",
+		})
+		return
+	}
+
+	scene, exists := sceneStore.GetScene(session.SceneID)
 	if !exists {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":  "expired",
@@ -1257,7 +1274,6 @@ func handleStatusCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
 		"status":    scene.Status,
-		"scene_id":  scene.SceneID,
 		"user_id":   scene.UserID,
 		"timestamp": scene.UpdatedAt.Unix(),
 	}
@@ -1267,52 +1283,9 @@ func handleStatusCheck(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func handleCallback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var callback struct {
-		SceneID string `json:"scene_id"`
-		Action  string `json:"action"`
-		UserID  string `json:"user_id,omitempty"`
-		OpenID  string `json:"open_id,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	if callback.SceneID == "" || (callback.Action != "confirm" && callback.Action != "cancel") {
-		http.Error(w, "Invalid parameters", http.StatusBadRequest)
-		return
-	}
-
-	status := "confirmed"
-	if callback.Action == "cancel" {
-		status = "cancelled"
-	}
-
-	if callback.SceneID == defaultTestSceneID {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"status":  "confirmed",
-		})
-		return
-	}
-
-	scene, exists := sceneStore.UpdateScene(callback.SceneID, status, callback.UserID, callback.OpenID)
-	if !exists {
-		http.Error(w, "Scene not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"status":  scene.Status,
-	})
-}
+// ─────────────────────────────────────────────
+// WebSocket / SSE 状态推送（通过 auth_session cookie）
+// ─────────────────────────────────────────────
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
@@ -1321,11 +1294,18 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sceneID := r.URL.Query().Get("scene_id")
-	if sceneID == "" {
-		http.Error(w, "缺少 scene_id 参数", http.StatusBadRequest)
+	sessionCookie, err := r.Cookie("auth_session")
+	if err != nil || sessionCookie.Value == "" {
+		http.Error(w, "会话无效", http.StatusUnauthorized)
 		return
 	}
+	sessionID := sessionCookie.Value
+	session, ok := authSessionStore.Get(sessionID)
+	if !ok {
+		http.Error(w, "会话不存在", http.StatusUnauthorized)
+		return
+	}
+	sceneID := session.SceneID
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -1334,17 +1314,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Fprintf(w, "data: {\"status\": \"connected\"}\n\n")
 	flusher.Flush()
-
-	if sceneID == defaultTestSceneID {
-		time.Sleep(2 * time.Second)
-		data, _ := json.Marshal(map[string]interface{}{
-			"status":        "confirmed",
-			"need_exchange": true,
-		})
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-		return
-	}
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -1381,6 +1350,49 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func handleCallback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var callback struct {
+		SceneID string `json:"scene_id"`
+		Action  string `json:"action"`
+		UserID  string `json:"user_id,omitempty"`
+		OpenID  string `json:"open_id,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	if callback.SceneID == "" || (callback.Action != "confirm" && callback.Action != "cancel") {
+		http.Error(w, "Invalid parameters", http.StatusBadRequest)
+		return
+	}
+
+	status := "confirmed"
+	if callback.Action == "cancel" {
+		status = "cancelled"
+	}
+
+	userID := callback.UserID
+	if userID == "" {
+		userID = generateUserID()
+	}
+	// OpenID 仅内部记录，不输出
+	scene, exists := sceneStore.UpdateScene(callback.SceneID, status, userID, "")
+	if !exists {
+		http.Error(w, "Scene not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"status":  scene.Status,
+	})
+}
+
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	accessTokenMu.RLock()
 	hasToken := accessToken != ""
@@ -1394,10 +1406,10 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":            "ok",
+		"status":             "ok",
 		"access_token_ready": hasToken,
-		"backend_service":   webServiceURL,
-		"static_files":      staticCount,
+		"backend_service":    webServiceURL,
+		"static_files":       staticCount,
 	})
 }
 
@@ -1437,8 +1449,6 @@ func refreshAccessToken() {
 	}
 }
 
-// generateMiniProgramCode 生成微信小程序码
-// scene 参数现在是 scene_token（一次性链路令牌）
 func generateMiniProgramCode(sceneToken string) (string, error) {
 	accessTokenMu.RLock()
 	token := accessToken
@@ -1448,15 +1458,13 @@ func generateMiniProgramCode(sceneToken string) (string, error) {
 		return "", fmt.Errorf("access token 未就绪")
 	}
 
-	// 使用 getwxacodeunlimit，scene 参数传递 scene_token
 	apiURL := fmt.Sprintf("https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token=%s", token)
 
 	reqBody := map[string]interface{}{
-		"scene":      sceneToken,           // 一次性令牌作为 scene 参数
-		"page":       "pages/index/index",     // 小程序授权页面路径
+		"scene":      sceneToken,
+		"page":       "pages/index/index",
 		"width":      280,
 		"env_version": "release",
-		// 可选：检查路径是否存在
 		"check_path": false,
 	}
 
@@ -1483,73 +1491,7 @@ func generateMiniProgramCode(sceneToken string) (string, error) {
 	return base64.StdEncoding.EncodeToString(body), nil
 }
 
-// ─────────────────────────────────────────────
-// Main
-// ─────────────────────────────────────────────
-
-func main() {
-	config, err := loadStaticConfig()
-	if err != nil {
-		log.Printf("⚠️ 加载静态文件配置失败: %v，静态文件功能不可用", err)
-	} else {
-		staticConfigMu.Lock()
-		staticConfig = config
-		staticConfigMu.Unlock()
-	}
-
-	go refreshAccessToken()
-
-	mux := http.NewServeMux()
-
-	// ── 原有路由 ────────────────────────────────
-	mux.HandleFunc("/login", handleLoginPage)
-	mux.HandleFunc("/api/status", handleStatusCheck)
-	mux.HandleFunc("/api/callback", handleCallback)
-	mux.HandleFunc("/api/ws", handleWebSocket)
-	mux.HandleFunc("/api/exchange-token", handleExchangeToken)
-	mux.HandleFunc("/health", handleHealth)
-
-	// ── 防护路由 ────────────────────────────
-	mux.HandleFunc("/api/qr-challenge", handleQRChallenge)
-	mux.HandleFunc("/api/qr", handleQRRequest)
-	mux.HandleFunc("/admin/suspicious", handleAdminSuspicious)
-
-	// ── 注意：/api/{scene_token} 动态路由在 handleGateway 中处理 ──
-
-	mux.HandleFunc("/", handleGateway)
-
-	// HTTP → HTTPS 重定向
-	go func() {
-		httpMux := http.NewServeMux()
-		httpMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			httpsURL := "https://" + r.Host + r.URL.Path
-			if r.URL.RawQuery != "" {
-				httpsURL += "?" + r.URL.RawQuery
-			}
-			http.Redirect(w, r, httpsURL, http.StatusMovedPermanently)
-		})
-		log.Println("HTTP 服务器启动在 :80")
-		if err := http.ListenAndServe(":80", httpMux); err != nil {
-			log.Printf("HTTP 服务器错误: %v", err)
-		}
-	}()
-
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-	httpsServer := &http.Server{
-		Addr:      ":443",
-		Handler:   mux,
-		TLSConfig: tlsConfig,
-	}
-
-	log.Printf("🚀 HTTPS 网关启动在 :443")
-	log.Printf("🔗 后端Web服务: %s", webServiceURL)
-	log.Printf("🔒 防护层已启用: IP封禁 + PoW挑战 + Turnstile + 设备指纹限流 + 一次性动态链路")
-	if err := httpsServer.ListenAndServeTLS(certPath, keyPath); err != nil {
-		log.Fatalf("HTTPS 服务器错误: %v", err)
-	}
-}
-
-// loginHTML 
+// HTML
 const loginHTML = `
 <!DOCTYPE html>
 <html>
@@ -1564,86 +1506,171 @@ const loginHTML = `
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
             min-height: 100vh;
-            display: flex; align-items: center; justify-content: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             padding: 20px;
         }
         .container {
-            background: white; border-radius: 32px; padding: 48px 32px;
-            box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25);
-            text-align: center; max-width: 420px; width: 100%;
+            background: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 12px;
+            padding: 48px 32px;
+            text-align: center;
+            max-width: 420px;
+            width: 100%;
+            margin: auto;
         }
-        .logo-img { width: 80px; height: 80px; margin-bottom: 16px; }
-        .logo-text { font-size: 64px; margin-bottom: 16px; }
-        .logo-text.pulse { animation: pulse 2s infinite; }
+        .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            margin-bottom: 16px; /* 保持原间距 */
+        }
         @keyframes pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.1)} }
-        h1 { font-size: 28px; font-weight: 700; color: #1a1a2e; margin-bottom: 8px; }
-        .subtitle { font-size: 14px; color: #666; margin-bottom: 32px; }
+        h1 {
+            font-size: 28px;
+            font-weight: 700;
+            color: #f0f6fc;
+            margin-bottom: 8px;
+        }
+        .subtitle {
+            font-size: 14px;
+            color: #8b949e;
+            margin-bottom: 32px;
+        }
         .qr-wrapper {
-            background: #f8f9fa; border-radius: 24px; padding: 20px;
-            border: 2px solid #e9ecef; min-height: 280px;
-            display: flex; align-items: center; justify-content: center;
-            position: relative; flex-direction: column; gap: 16px;
+            background: #0d1117;
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #21262d;
+            min-height: 280px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            flex-direction: column;
+            gap: 16px;
         }
-        .qr-code { width: 100%; max-width: 240px; border-radius: 16px; display: none; }
+        .qr-code {
+            width: 100%;
+            max-width: 240px;
+            border-radius: 12px;
+            display: none;
+        }
         #getQRBtn {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white; border: none; border-radius: 16px;
-            padding: 16px 32px; font-size: 16px; font-weight: 600;
-            cursor: pointer; transition: opacity .2s;
+            background: #238636;
+            color: white;
+            border: 1px solid #2ea043;
+            border-radius: 8px;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
         }
-        #getQRBtn:hover { opacity: 0.85; }
-        #getQRBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+        #getQRBtn:hover { background: #2ea043; }
+        #getQRBtn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
         .status-overlay {
-            display: none; position: absolute;
+            display: none;
+            position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(255,255,255,0.95); border-radius: 24px;
-            align-items: center; justify-content: center;
-            flex-direction: column; z-index: 10;
+            background: rgba(22,27,34,0.95);
+            border-radius: 12px;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            z-index: 10;
         }
         .status-overlay.active { display: flex; }
         .status-icon { font-size: 48px; margin-bottom: 16px; }
-        .status-message { font-size: 18px; font-weight: 600; color: #1a1a2e; }
-        .status-text {
-            margin-top: 16px; padding: 12px 16px; border-radius: 12px;
-            font-size: 14px; display: flex; align-items: center;
-            justify-content: center; gap: 8px;
+        .status-message {
+            font-size: 18px;
+            font-weight: 600;
+            color: #f0f6fc;
         }
-        .status-text.waiting { background: #eff6ff; color: #1e40af; }
-        .status-text.success { background: #f0fdf4; color: #166534; }
-        .status-text.error   { background: #fef2f2; color: #991b1b; }
+        .status-text {
+            margin-top: 16px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .status-text.waiting { background: #1a2332; color: #58a6ff; }
+        .status-text.success { background: #0d2a1e; color: #3fb950; }
+        .status-text.error   { background: #2a1215; color: #f85149; }
         .tip {
-            background: #f0fdf4; border-left: 4px solid #22c55e;
-            padding: 16px; border-radius: 12px; text-align: left; margin-top: 24px;
+            background: #0d2a1e;
+            border-left: 4px solid #3fb950;
+            padding: 16px;
+            border-radius: 8px;
+            text-align: left;
+            margin-top: 24px;
+            color: #c9d1d9;
         }
         #powProgress {
-            font-size: 12px; color: #888; margin-top: 8px; display: none;
+            font-size: 12px;
+            color: #8b949e;
+            margin-top: 8px;
+            display: none;
         }
         #cooldownBar {
-            width: 100%; background: #e5e7eb; border-radius: 8px;
-            height: 6px; margin-top: 12px; display: none; overflow: hidden;
+            width: 100%;
+            background: #21262d;
+            border-radius: 8px;
+            height: 6px;
+            margin-top: 12px;
+            display: none;
+            overflow: hidden;
         }
         #cooldownFill {
-            height: 100%; background: linear-gradient(90deg, #667eea, #764ba2);
-            border-radius: 8px; transition: width 1s linear;
+            height: 100%;
+            background: #238636;
+            border-radius: 8px;
+            transition: width 1s linear;
+        }
+        /* 底部备案 */
+        .footer {
+            text-align: center;
+            padding: 20px;
+            font-size: 12px;
+            color: #484f58;
+            width: 100%;
+            margin-top: auto;
+        }
+        .footer a {
+            color: #484f58;
+            text-decoration: none;
+            margin: 0 8px;
+        }
+        .footer a:hover {
+            color: #58a6ff;
+            text-decoration: underline;
         }
     </style>
 </head>
 <body>
 <div class="container">
-    <img class="logo-img" src="/logo.png" alt="Logo"
-         onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-    <div class="logo-text pulse" id="mainIcon" style="display:none;">📱</div>
+    <img class="avatar" src="https://zhiliaoya.cn/logo.png" alt="知了涯">
     <h1 id="mainTitle">微信扫码登录</h1>
     <div class="subtitle">使用微信扫一扫，确认登录</div>
 
     <div class="qr-wrapper" id="qrWrapper">
-        <!-- 初始：显示获取按钮 -->
         <div id="qrPlaceholder">
             {{if .TurnstileSiteKey}}
-            <div class="cf-turnstile" data-sitekey="{{.TurnstileSiteKey}}" data-theme="light"
+            <div class="cf-turnstile" data-sitekey="{{.TurnstileSiteKey}}" data-theme="dark"
                  id="cfWidget" style="margin-bottom:12px;"></div>
             {{end}}
             <button id="getQRBtn" onclick="startGetQR()">点击获取二维码</button>
@@ -1672,11 +1699,18 @@ const loginHTML = `
     </div>
 </div>
 
+<!-- 底部备案 -->
+<div class="footer">
+    <p>
+        <a href="https://beian.miit.gov.cn/" target="_blank">黔ICP备2026047859号</a>
+        <a href="https://beian.mps.gov.cn/#/query/webSearch?code=52040002000182" target="_blank">贵公网安备52040002000182号</a>
+    </p>
+    <p style="margin-top:0.5rem;">© 2026 知了涯 zhiliaoya.cn</p>
+</div>
+
 <script>
-// ── 设备指纹（轻量级，canvas + audio + 屏幕特征） ──────────────
 function getFingerprint() {
     var parts = [];
-    // Canvas 指纹
     try {
         var c = document.createElement('canvas');
         var ctx = c.getContext('2d');
@@ -1685,22 +1719,14 @@ function getFingerprint() {
         ctx.fillText('fp-zhiliaoya-\u5fae\u4fe1', 2, 2);
         parts.push(c.toDataURL().slice(-32));
     } catch(e) {}
-    // 屏幕
     parts.push(screen.width + 'x' + screen.height + 'x' + screen.colorDepth);
-    // 时区
     parts.push(new Date().getTimezoneOffset());
-    // 语言
     parts.push(navigator.language || '');
-    // 平台
     parts.push(navigator.platform || '');
-    // 硬件并发
     parts.push(navigator.hardwareConcurrency || 0);
-    // 插件数量
     parts.push(navigator.plugins ? navigator.plugins.length : 0);
-    // 触摸点
     parts.push(navigator.maxTouchPoints || 0);
     var raw = parts.join('|');
-    // 简单 hash
     var h = 0;
     for (var i = 0; i < raw.length; i++) {
         h = (Math.imul(31, h) + raw.charCodeAt(i)) | 0;
@@ -1708,7 +1734,6 @@ function getFingerprint() {
     return Math.abs(h).toString(16).padStart(8, '0') + raw.length.toString(16);
 }
 
-// ── 工作量证明（浏览器端 SHA-256） ───────────────────────────
 async function sha256(message) {
     var msgBuffer = new TextEncoder().encode(message);
     var hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
@@ -1717,8 +1742,6 @@ async function sha256(message) {
 }
 
 async function solvePoW(seed, difficulty) {
-    // difficulty = 要求前导零 bit 数
-    // 每个 hex 字符代表 4 bit，difficulty/4 个 hex 字符需为 '0'
     var leadingZeroHexChars = Math.ceil(difficulty / 4);
     var target = '0'.repeat(leadingZeroHexChars);
     var nonce = 0;
@@ -1731,13 +1754,11 @@ async function solvePoW(seed, difficulty) {
         if (nonce % 5000 === 0) {
             document.getElementById('powProgress').textContent =
                 '⚙️ 正在计算验证... ' + nonce + ' 次尝试';
-            // 让浏览器喘息
             await new Promise(r => setTimeout(r, 0));
         }
     }
 }
 
-// ── Turnstile token 获取 ──────────────────────────────────
 function getTurnstileToken() {
     if (typeof turnstile === 'undefined') return Promise.resolve('');
     return new Promise(function(resolve) {
@@ -1754,8 +1775,6 @@ function getTurnstileToken() {
     });
 }
 
-// ── 主流程 ────────────────────────────────────────────────
-var sceneID = null;
 var pollTimer = null;
 var cooldownTimer = null;
 
@@ -1767,11 +1786,9 @@ async function startGetQR() {
     progress.style.display = 'block';
 
     try {
-        // 1. 获取 PoW 挑战
         var challengeResp = await fetch('/api/qr-challenge');
         var challenge = await challengeResp.json();
 
-        // 2. 并行：解 PoW + 获取 Turnstile token
         progress.textContent = '⚙️ 正在计算验证...';
         var [nonce, captchaToken] = await Promise.all([
             solvePoW(challenge.seed, challenge.difficulty),
@@ -1780,7 +1797,6 @@ async function startGetQR() {
 
         progress.textContent = '✅ 验证完成，获取二维码...';
 
-        // 3. 请求二维码
         var fingerprint = getFingerprint();
         var qrResp = await fetch('/api/qr', {
             method: 'POST',
@@ -1796,7 +1812,6 @@ async function startGetQR() {
 
         if (!data.success) {
             showError(data.error || '获取失败，请稍后重试');
-            // 如果是限流，显示冷却倒计时
             if (qrResp.status === 429 && data.retry_after) {
                 startCooldown(data.retry_after);
             } else {
@@ -1805,16 +1820,12 @@ async function startGetQR() {
             return;
         }
 
-        sceneID = data.scene_id;
-
-        // 4. 展示二维码，隐藏按钮
         document.getElementById('qrPlaceholder').style.display = 'none';
         var img = document.getElementById('qrImage');
         img.src = 'data:image/png;base64,' + data.qr;
         img.style.display = 'block';
         document.getElementById('statusText').style.display = 'flex';
 
-        // 5. 开始轮询状态
         startPolling();
 
     } catch(e) {
@@ -1850,7 +1861,6 @@ function resetBtn() {
     btn.disabled = false;
     btn.textContent = '点击获取二维码';
     document.getElementById('powProgress').style.display = 'none';
-    // 重置 Turnstile
     if (typeof turnstile !== 'undefined') {
         try { turnstile.reset(); } catch(e) {}
     }
@@ -1870,7 +1880,7 @@ function startPolling() {
 
     if (!!window.EventSource) {
         setTimeout(function() {
-            var es = new EventSource('/api/ws?scene_id=' + sceneID);
+            var es = new EventSource('/api/ws');
             es.onmessage = function(event) {
                 try {
                     var data = JSON.parse(event.data);
@@ -1886,8 +1896,7 @@ function startPolling() {
 }
 
 function checkStatus() {
-    if (!sceneID) return;
-    fetch('/api/status?scene_id=' + sceneID)
+    fetch('/api/status')
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.status === 'confirmed' || data.status === 'confirm') {
@@ -1899,7 +1908,6 @@ function checkStatus() {
                 statusText.className = 'status-text error';
                 document.getElementById('statusTextMessage').textContent =
                     data.status === 'cancelled' ? '登录已取消' : '二维码已过期，请重新获取';
-                // 超时后允许重新获取
                 setTimeout(function() {
                     document.getElementById('qrImage').style.display = 'none';
                     document.getElementById('qrPlaceholder').style.display = 'flex';
@@ -1922,12 +1930,12 @@ function showSuccess() {
 
 var isExchanging = false;
 function exchangeToken() {
-    if (isExchanging || !sceneID) return;
+    if (isExchanging) return;
     isExchanging = true;
     fetch('/api/exchange-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scene_id: sceneID })
+        body: JSON.stringify({})
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -1947,3 +1955,64 @@ window.addEventListener('beforeunload', function() {
 </body>
 </html>
 `
+
+// ─────────────────────────────────────────────
+// Main
+// ─────────────────────────────────────────────
+
+func main() {
+	config, err := loadStaticConfig()
+	if err != nil {
+		log.Printf("⚠️ 加载静态文件配置失败: %v，静态文件功能不可用", err)
+	} else {
+		staticConfigMu.Lock()
+		staticConfig = config
+		staticConfigMu.Unlock()
+	}
+
+	go refreshAccessToken()
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/login", handleLoginPage)
+	mux.HandleFunc("/api/status", handleStatusCheck)
+	mux.HandleFunc("/api/callback", handleCallback)
+	mux.HandleFunc("/api/ws", handleWebSocket)
+	mux.HandleFunc("/api/exchange-token", handleExchangeToken)
+	mux.HandleFunc("/health", handleHealth)
+
+	mux.HandleFunc("/api/qr-challenge", handleQRChallenge)
+	mux.HandleFunc("/api/qr", handleQRRequest)
+	mux.HandleFunc("/admin/suspicious", handleAdminSuspicious)
+
+	mux.HandleFunc("/", handleGateway)
+
+	go func() {
+		httpMux := http.NewServeMux()
+		httpMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			httpsURL := "https://" + r.Host + r.URL.Path
+			if r.URL.RawQuery != "" {
+				httpsURL += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, httpsURL, http.StatusMovedPermanently)
+		})
+		log.Println("HTTP 服务器启动在 :80")
+		if err := http.ListenAndServe(":80", httpMux); err != nil {
+			log.Printf("HTTP 服务器错误: %v", err)
+		}
+	}()
+
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	httpsServer := &http.Server{
+		Addr:      ":443",
+		Handler:   mux,
+		TLSConfig: tlsConfig,
+	}
+
+	log.Printf("🚀 HTTPS 网关启动在 :443")
+	log.Printf("🔗 后端Web服务: %s", webServiceURL)
+	log.Printf("🔒 防护层已启用: IP封禁 + PoW挑战 + Turnstile + 设备指纹限流 + 一次性动态链路 + 零OpenID暴露")
+	if err := httpsServer.ListenAndServeTLS(certPath, keyPath); err != nil {
+		log.Fatalf("HTTPS 服务器错误: %v", err)
+	}
+}
