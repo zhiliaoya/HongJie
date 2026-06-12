@@ -1,6 +1,6 @@
 <view class="container">
   <view class="logo-container">
-    <image class="logo" src="https://zhiliaoya.cn/logo.png" mode="aspectFit"></image>
+    <image class="logo" src="你的域名地址/logo.png" mode="aspectFit"></image>
   </view>
 
   <!-- ========== 非扫码进入：功能介绍页 ========== -->
@@ -93,7 +93,7 @@
         <button class="cancel-btn" bindtap="cancelLogin" hover-class="cancel-btn-hover">取消</button>
       </block>
       <view wx:if="{{loading}}" class="loading-container">
-        <image class="loading-gif" src="https://zhiliaoya.cn/loading.gif" mode="aspectFit"></image>
+        <image class="loading-gif" src="你的域名地址/loading.gif" mode="aspectFit"></image>
         <text class="loading-text">正在验证身份...</text>
         <text class="loading-desc">正在通过微信官方接口验证您的OpenID</text>
       </view>
