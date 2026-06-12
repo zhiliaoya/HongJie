@@ -1,7 +1,7 @@
 <view class="container">
   <!-- 新增 logo 区域 -->
   <view class="logo-container">
-    <image class="logo" src="https://zhiliaoya.cn/logo.png" mode="aspectFit"></image>
+    <image class="logo" src="你的域名地址/logo.png" mode="aspectFit"></image>
   </view>
 
   <text class="title">{{resultTitle}}</text>
