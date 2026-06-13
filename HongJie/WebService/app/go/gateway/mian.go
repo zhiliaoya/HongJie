@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
@@ -34,15 +35,22 @@ var (
 	webServiceURL    = "http://web-service:80" // 自行修改
 	staticConfigPath = "static_files.json" // 自行修改
 
-	// Cloudflare Turnstile 密钥
-	cfTurnstileSecret  = "" // 自行填写
-	cfTurnstileSiteKey = "" // 自行填写
+	jwtSecret = func() []byte {
+		if s := os.Getenv("JWT_SECRET"); s != "" {
+			return []byte(s)
+		}
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			panic("JWT_SECRET 未设置且随机生成失败")
+		}
+		log.Printf("⚠️ JWT_SECRET 未设置，使用随机密钥（服务重启后所有用户将需重新登录）")
+		return b
+	}()
 
 	accessToken   string
 	accessTokenMu sync.RWMutex
 
 	sceneStore       = NewSceneStore()
-	authTokenStore   = NewAuthTokenStore()
 	authSessionStore = NewAuthSessionStore()
 
 	staticConfig   *StaticConfig
@@ -159,7 +167,6 @@ func generateSceneToken() string {
 type AuthSession struct {
 	SessionID string    `json:"session_id"`
 	SceneID   string    `json:"scene_id"`
-	Confirmed bool      `json:"confirmed"`
 	Exchanged bool      `json:"exchanged"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -598,13 +605,12 @@ func (l *SuspiciousLogger) RecentEvents(n int) []SuspiciousEvent {
 // ─────────────────────────────────────────────
 
 type SceneStatus struct {
-	SceneID     string    `json:"scene_id"`
-	Status      string    `json:"status"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-	UserID      string    `json:"user_id,omitempty"`
-	OpenID      string    `json:"-"` // 仅内部记录，绝不输出
-	RedirectURI string    `json:"redirect_uri,omitempty"`
+	SceneID   string    `json:"scene_id"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	UserID    string    `json:"user_id,omitempty"`
+	OpenID    string    `json:"-"` // 仅内部记录，绝不输出
 }
 
 type SceneStore struct {
@@ -612,70 +618,73 @@ type SceneStore struct {
 	scenes map[string]*SceneStatus
 }
 
-type AuthToken struct {
-	Token     string    `json:"token"`
-	UserID    string    `json:"user_id"`
-	SceneID   string    `json:"scene_id"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
+// ─────────────────────────────────────────────
+// JWT 授权令牌（HS256）
+// ─────────────────────────────────────────────
+
+// JWTClaims 是 JWT payload 的结构
+type JWTClaims struct {
+	UserID  string `json:"uid"`
+	SceneID string `json:"sid"`
+	Iat     int64  `json:"iat"` // issued at
+	Exp     int64  `json:"exp"` // expires at
 }
 
-type AuthTokenStore struct {
-	mu     sync.RWMutex
-	tokens map[string]*AuthToken
+func jwtBase64(b []byte) string {
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-func NewAuthTokenStore() *AuthTokenStore {
-	store := &AuthTokenStore{tokens: make(map[string]*AuthToken)}
-	go store.cleanExpiredTokens()
-	return store
-}
-
-func (s *AuthTokenStore) CreateToken(userID, sceneID string) *AuthToken {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	token := generateAuthToken()
-	authToken := &AuthToken{
-		Token:     token,
-		UserID:    userID,
-		SceneID:   sceneID,
-		CreatedAt: time.Now(),
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+// issueJWT 生成一个有效期 24h 的 JWT
+func issueJWT(userID, sceneID string) (string, time.Time, error) {
+	now := time.Now()
+	exp := now.Add(24 * time.Hour)
+	claims := JWTClaims{
+		UserID:  userID,
+		SceneID: sceneID,
+		Iat:     now.Unix(),
+		Exp:     exp.Unix(),
 	}
-	s.tokens[token] = authToken
-	log.Printf("✅ 创建授权令牌 [Token: %s..., UserID: %s]", token[:16], userID)
-	return authToken
+	header := jwtBase64([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	payloadBytes, err := json.Marshal(claims)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	payload := jwtBase64(payloadBytes)
+	signing := header + "." + payload
+	mac := hmac.New(sha256.New, jwtSecret)
+	mac.Write([]byte(signing))
+	sig := jwtBase64(mac.Sum(nil))
+	token := signing + "." + sig
+	log.Printf("✅ 生成 JWT [UserID: %s, 过期: %s]", userID, exp.Format(time.RFC3339))
+	return token, exp, nil
 }
 
-func (s *AuthTokenStore) ValidateToken(token string) (*AuthToken, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	authToken, exists := s.tokens[token]
-	if !exists {
+// validateJWT 验证签名并返回 claims，不查内存表
+func validateJWT(token string) (*JWTClaims, bool) {
+	parts := strings.SplitN(token, ".", 3)
+	if len(parts) != 3 {
 		return nil, false
 	}
-	if time.Now().After(authToken.ExpiresAt) {
-		delete(s.tokens, token)
+	signing := parts[0] + "." + parts[1]
+	mac := hmac.New(sha256.New, jwtSecret)
+	mac.Write([]byte(signing))
+	expectedSig := jwtBase64(mac.Sum(nil))
+	if !hmac.Equal([]byte(parts[2]), []byte(expectedSig)) {
 		return nil, false
 	}
-	return authToken, true
-}
-
-func (s *AuthTokenStore) cleanExpiredTokens() {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
-	for range ticker.C {
-		s.mu.Lock()
-		now := time.Now()
-		for token, authToken := range s.tokens {
-			if now.After(authToken.ExpiresAt) {
-				delete(s.tokens, token)
-			}
-		}
-		s.mu.Unlock()
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, false
 	}
+	var claims JWTClaims
+	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
+		return nil, false
+	}
+	if time.Now().Unix() > claims.Exp {
+		return nil, false
+	}
+	return &claims, true
 }
-
 func NewSceneStore() *SceneStore {
 	store := &SceneStore{scenes: make(map[string]*SceneStatus)}
 	go store.cleanExpiredScenes()
@@ -772,11 +781,6 @@ func generateSceneID() string {
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
-
-func generateAuthToken() string {
-	b := make([]byte, 32)
-	rand.Read(b)
-	return hex.EncodeToString(b)
 }
 
 func generateUserID() string {
@@ -830,10 +834,9 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Fingerprint  string `json:"fingerprint"`
-		PowSeed      string `json:"pow_seed"`
-		PowNonce     string `json:"pow_nonce"`
-		CaptchaToken string `json:"captcha_token"`
+		Fingerprint string `json:"fingerprint"`
+		PowSeed     string `json:"pow_seed"`
+		PowNonce    string `json:"pow_nonce"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
@@ -849,18 +852,6 @@ func handleQRRequest(w http.ResponseWriter, r *http.Request) {
 			"success": false, "error": "请求参数不完整",
 		})
 		return
-	}
-
-	if cfTurnstileSecret != "" {
-		if !verifyCFTurnstile(req.CaptchaToken, ip) {
-			suspiciousLog.Log(ip, "captcha_failed", "Turnstile验证失败")
-			ipBanList.AddStrike(ip)
-			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"success": false, "error": "人机验证失败，请重试",
-			})
-			return
-		}
 	}
 
 	if !challengeStore.Verify(req.PowSeed, req.PowNonce) {
@@ -957,14 +948,28 @@ func handleSceneTokenCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var body struct {
+		Action string `json:"action"`
+		Code   string `json:"code"`
+	}
+	if r.Method == "POST" {
+		json.NewDecoder(r.Body).Decode(&body) //nolint:errcheck
+	}
+
+	// 小程序取消登录：action=cancel，无 code
+	if body.Action == "cancel" {
+		sceneStore.UpdateScene(sceneID, "cancelled", "", "")
+		log.Printf("🚫 用户取消登录 [SceneID: %s]", sceneID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true, "message": "已取消登录",
+		})
+		return
+	}
+
 	code := r.URL.Query().Get("code")
-	if code == "" && r.Method == "POST" {
-		var body struct {
-			Code string `json:"code"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-			code = body.Code
-		}
+	if code == "" {
+		code = body.Code
 	}
 
 	if code == "" {
@@ -1033,36 +1038,6 @@ func getWechatOpenID(code string) (string, error) {
 }
 
 // ─────────────────────────────────────────────
-// Cloudflare Turnstile 验证
-// ─────────────────────────────────────────────
-
-func verifyCFTurnstile(token, ip string) bool {
-	if token == "" {
-		return false
-	}
-	resp, err := http.PostForm(
-		"https://challenges.cloudflare.com/turnstile/v0/siteverify",
-		url.Values{
-			"secret":   {cfTurnstileSecret},
-			"response": {token},
-			"remoteip": {ip},
-		},
-	)
-	if err != nil {
-		log.Printf("⚠️ Turnstile 请求失败: %v", err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Success bool `json:"success"`
-	}
-	body, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(body, &result)
-	return result.Success
-}
-
-// ─────────────────────────────────────────────
 // 管理端点
 // ─────────────────────────────────────────────
 
@@ -1078,10 +1053,20 @@ func handleAdminSuspicious(w http.ResponseWriter, r *http.Request) {
 }
 
 func isPrivateIP(ip string) bool {
-	privateRanges := []string{"127.", "10.", "172.16.", "172.17.", "192.168.", "::1"}
-	for _, prefix := range privateRanges {
+	// RFC-1918 + loopback
+	for _, prefix := range []string{"127.", "10.", "192.168.", "::1"} {
 		if strings.HasPrefix(ip, prefix) {
 			return true
+		}
+	}
+	// 172.16.0.0/12 覆盖 172.16.x.x ～ 172.31.x.x（含 Docker 默认 bridge 网段）
+	if strings.HasPrefix(ip, "172.") {
+		parts := strings.SplitN(ip, ".", 3)
+		if len(parts) >= 2 {
+			second, err := strconv.Atoi(parts[1])
+			if err == nil && second >= 16 && second <= 31 {
+				return true
+			}
 		}
 	}
 	return false
@@ -1108,9 +1093,9 @@ func handleGateway(w http.ResponseWriter, r *http.Request) {
 
 	authCookie, err := r.Cookie("auth_token")
 	if err == nil && authCookie.Value != "" {
-		if authToken, valid := authTokenStore.ValidateToken(authCookie.Value); valid {
-			log.Printf("✅ 已认证 [UserID: %s]，代理转发", authToken.UserID)
-			proxyToBackend(w, r, authToken)
+		if claims, valid := validateJWT(authCookie.Value); valid {
+			log.Printf("✅ 已认证 [UserID: %s]，代理转发", claims.UserID)
+			proxyToBackend(w, r, claims)
 			return
 		}
 		http.SetCookie(w, &http.Cookie{
@@ -1125,7 +1110,7 @@ func handleGateway(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
-func proxyToBackend(w http.ResponseWriter, r *http.Request, authToken *AuthToken) {
+func proxyToBackend(w http.ResponseWriter, r *http.Request, claims *JWTClaims) {
 	target, err := url.Parse(webServiceURL)
 	if err != nil {
 		http.Error(w, "服务不可用", http.StatusServiceUnavailable)
@@ -1135,8 +1120,7 @@ func proxyToBackend(w http.ResponseWriter, r *http.Request, authToken *AuthToken
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
-		req.Header.Set("X-User-ID", authToken.UserID)
-		req.Header.Set("X-Auth-Token", authToken.Token)
+		req.Header.Set("X-User-ID", claims.UserID)
 		req.Header.Set("X-Forwarded-For", r.RemoteAddr)
 		req.Header.Set("X-Forwarded-Proto", "https")
 		req.Header.Set("X-Forwarded-Host", r.Host)
@@ -1155,16 +1139,14 @@ func proxyToBackend(w http.ResponseWriter, r *http.Request, authToken *AuthToken
 func handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	authCookie, err := r.Cookie("auth_token")
 	if err == nil && authCookie.Value != "" {
-		if authToken, valid := authTokenStore.ValidateToken(authCookie.Value); valid {
-			proxyToBackend(w, r, authToken)
+		if claims, valid := validateJWT(authCookie.Value); valid {
+			proxyToBackend(w, r, claims)
 			return
 		}
 	}
 
 	tmpl := template.Must(template.New("login").Parse(loginHTML))
-	tmpl.Execute(w, map[string]interface{}{
-		"TurnstileSiteKey": cfTurnstileSiteKey,
-	})
+	tmpl.Execute(w, nil)
 }
 
 // ─────────────────────────────────────────────
@@ -1213,12 +1195,19 @@ func handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	authToken := authTokenStore.CreateToken(scene.UserID, session.SceneID)
+	jwtToken, jwtExp, err := issueJWT(scene.UserID, session.SceneID)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false, "message": "生成令牌失败，请重试",
+		})
+		return
+	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
-		Value:    authToken.Token,
+		Value:    jwtToken,
 		Path:     "/",
-		Expires:  authToken.ExpiresAt,
+		Expires:  jwtExp,
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
@@ -1242,9 +1231,10 @@ func handleExchangeToken(w http.ResponseWriter, r *http.Request) {
 // ─────────────────────────────────────────────
 
 func handleStatusCheck(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	sessionCookie, err := r.Cookie("auth_session")
 	if err != nil || sessionCookie.Value == "" {
-		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":  "expired",
 			"message": "会话不存在",
@@ -1271,7 +1261,6 @@ func handleStatusCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
 		"status":    scene.Status,
 		"user_id":   scene.UserID,
@@ -1350,48 +1339,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func handleCallback(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var callback struct {
-		SceneID string `json:"scene_id"`
-		Action  string `json:"action"`
-		UserID  string `json:"user_id,omitempty"`
-		OpenID  string `json:"open_id,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&callback); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	if callback.SceneID == "" || (callback.Action != "confirm" && callback.Action != "cancel") {
-		http.Error(w, "Invalid parameters", http.StatusBadRequest)
-		return
-	}
-
-	status := "confirmed"
-	if callback.Action == "cancel" {
-		status = "cancelled"
-	}
-
-	userID := callback.UserID
-	if userID == "" {
-		userID = generateUserID()
-	}
-	// OpenID 仅内部记录，不输出
-	scene, exists := sceneStore.UpdateScene(callback.SceneID, status, userID, "")
-	if !exists {
-		http.Error(w, "Scene not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success": true,
-		"status":  scene.Status,
-	})
-}
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	accessTokenMu.RLock()
@@ -1415,7 +1362,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func refreshAccessToken() {
 	for {
-		if wechatAppID == "" || wechatAppID == "you wechatAppID" {
+		if wechatAppID == "" || wechatAppSecret == "" {
 			time.Sleep(60 * time.Second)
 			continue
 		}
@@ -1500,9 +1447,6 @@ const loginHTML = `
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
-    {{if .TurnstileSiteKey}}
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-    {{end}}
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -1669,10 +1613,6 @@ const loginHTML = `
 
     <div class="qr-wrapper" id="qrWrapper">
         <div id="qrPlaceholder">
-            {{if .TurnstileSiteKey}}
-            <div class="cf-turnstile" data-sitekey="{{.TurnstileSiteKey}}" data-theme="dark"
-                 id="cfWidget" style="margin-bottom:12px;"></div>
-            {{end}}
             <button id="getQRBtn" onclick="startGetQR()">点击获取二维码</button>
             <div id="powProgress">⚙️ 正在计算验证...</div>
             <div id="cooldownBar"><div id="cooldownFill" style="width:100%"></div></div>
@@ -1692,9 +1632,8 @@ const loginHTML = `
         <div style="font-weight:600;margin-bottom:8px;">📌 使用步骤</div>
         <div style="font-size:13px;line-height:1.8;">
             1. 点击「获取二维码」按钮<br>
-            2. 完成人机验证<br>
-            3. 打开微信扫一扫<br>
-            4. 扫描小程序码，点击「确认登录」
+            2. 打开微信扫一扫<br>
+            3. 扫描小程序码，点击「确认登录」
         </div>
     </div>
 </div>
@@ -1759,22 +1698,6 @@ async function solvePoW(seed, difficulty) {
     }
 }
 
-function getTurnstileToken() {
-    if (typeof turnstile === 'undefined') return Promise.resolve('');
-    return new Promise(function(resolve) {
-        var widget = document.getElementById('cfWidget');
-        if (!widget) return resolve('');
-        try {
-            var token = turnstile.getResponse();
-            if (token) return resolve(token);
-            turnstile.render('#cfWidget', {
-                sitekey: widget.dataset.sitekey,
-                callback: resolve
-            });
-        } catch(e) { resolve(''); }
-    });
-}
-
 var pollTimer = null;
 var cooldownTimer = null;
 
@@ -1790,10 +1713,7 @@ async function startGetQR() {
         var challenge = await challengeResp.json();
 
         progress.textContent = '⚙️ 正在计算验证...';
-        var [nonce, captchaToken] = await Promise.all([
-            solvePoW(challenge.seed, challenge.difficulty),
-            getTurnstileToken()
-        ]);
+        var nonce = await solvePoW(challenge.seed, challenge.difficulty);
 
         progress.textContent = '✅ 验证完成，获取二维码...';
 
@@ -1802,10 +1722,9 @@ async function startGetQR() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                fingerprint:   fingerprint,
-                pow_seed:      challenge.seed,
-                pow_nonce:     nonce,
-                captcha_token: captchaToken
+                fingerprint: fingerprint,
+                pow_seed:    challenge.seed,
+                pow_nonce:   nonce
             })
         });
         var data = await qrResp.json();
@@ -1861,9 +1780,6 @@ function resetBtn() {
     btn.disabled = false;
     btn.textContent = '点击获取二维码';
     document.getElementById('powProgress').style.display = 'none';
-    if (typeof turnstile !== 'undefined') {
-        try { turnstile.reset(); } catch(e) {}
-    }
 }
 
 function showError(msg) {
@@ -1976,7 +1892,6 @@ func main() {
 
 	mux.HandleFunc("/login", handleLoginPage)
 	mux.HandleFunc("/api/status", handleStatusCheck)
-	mux.HandleFunc("/api/callback", handleCallback)
 	mux.HandleFunc("/api/ws", handleWebSocket)
 	mux.HandleFunc("/api/exchange-token", handleExchangeToken)
 	mux.HandleFunc("/health", handleHealth)
@@ -2011,7 +1926,7 @@ func main() {
 
 	log.Printf("🚀 HTTPS 网关启动在 :443")
 	log.Printf("🔗 后端Web服务: %s", webServiceURL)
-	log.Printf("🔒 防护层已启用: IP封禁 + PoW挑战 + Turnstile + 设备指纹限流 + 一次性动态链路 + 零OpenID暴露")
+	log.Printf("🔒 防护层已启用: IP封禁 + PoW挑战 + 设备指纹限流 + 一次性动态链路 + 零OpenID暴露")
 	if err := httpsServer.ListenAndServeTLS(certPath, keyPath); err != nil {
 		log.Fatalf("HTTPS 服务器错误: %v", err)
 	}
