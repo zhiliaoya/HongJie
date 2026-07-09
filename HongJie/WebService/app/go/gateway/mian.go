@@ -781,7 +781,6 @@ func generateSceneID() string {
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
-}
 
 func generateUserID() string {
 	b := make([]byte, 16)
